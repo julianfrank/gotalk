@@ -18,8 +18,13 @@ func main() {
 	y.AddHandler("echo", echo)
 	y.StartTCPServer("localhost:9092")
 
+	log.Println(" x connecting to y")
 	z, err := x.PeerConnect("localhost:9092")
+
 	log.Println(z.Addr(), err)
+
+	r, err := x.Request("echo", []byte("Hello"))
+	log.Println(r, err)
 
 	//x.StartWSServer("localhost:9091", onWSConnect, true, nil)
 

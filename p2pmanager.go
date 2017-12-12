@@ -13,7 +13,11 @@ var (
 //GtMan Structure to hold the Manager
 type GtMan struct {
 	localTCPServerName string
+	tcpServer          *Server
 	localWSServerName  string
+	wsServer           *WebSocketServer
+
+	peer *Sock
 
 	handlers *Handlers
 
@@ -55,6 +59,7 @@ func (gm GtMan) StartTCPServer(url string) (*Server, error) {
 	s, err := Listen("tcp", gm.localTCPServerName)
 	s.Handlers = gm.handlers
 	go s.Accept()
+	gm.tcpServer = s
 	return s, err
 }
 
@@ -76,6 +81,7 @@ func (gm GtMan) StartWSServer(url string, onWSPeerConnect SockHandler, enableFil
 		http.ListenAndServe(gm.localWSServerName, httpHandlers)
 	}()
 
+	gm.wsServer = ws
 	return ws, nil
 }
 
@@ -84,5 +90,11 @@ func (gm GtMan) PeerConnect(url string) (*Sock, error) {
 	gtLog("GtMan.PeerConnect url:%s", url)
 
 	s, err := Connect("tcp", url)
+	gm.peer = s
 	return s, err
+}
+
+//Request send Request for Service
+func (gm GtMan) Request(serviceName string, param []byte) ([]byte, error) {
+	return gm.peer.BufferRequest(serviceName, param)
 }
