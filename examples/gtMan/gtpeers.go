@@ -21,21 +21,22 @@ func main() {
 	log.Println(" x connecting to y")
 	z, err := x.PeerConnect("localhost:9092")
 
-	log.Println(z.Addr(), err)
+	log.Println("z.Addr= ", z.Addr(), err)
 
 	r, err := x.Request("echo", []byte("Hello"))
-	log.Println(r, err)
+	log.Println("echo Response", r, err)
 
 	//x.StartWSServer("localhost:9091", onWSConnect, true, nil)
 
 }
 
 func echo(s *gotalk.Sock, name string, in []byte) ([]byte, error) {
-	log.Println(s, name, in)
+	log.Println("echo received on ", s.Addr(), name, string(in))
+
 	return in, nil
 }
 
 func onWSConnect(s *gotalk.Sock) {
 	s.Notify("hello", "world")
-	log.Println(s.Addr())
+	log.Println("onWSConnect", s.Addr())
 }

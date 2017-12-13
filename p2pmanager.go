@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 )
 
 var (
@@ -25,9 +26,9 @@ type GtMan struct {
 }
 
 func gtLog(pattern string, message ...interface{}) string {
-	s := fmt.Sprintf(pattern, message...)
+	s := fmt.Sprintf("p2pmanager.go:\t"+pattern, message...)
 	if debug {
-		log.Println(s)
+		fmt.Println(s)
 	}
 	return s
 }
@@ -37,18 +38,20 @@ func NewManager(d bool) GtMan {
 	debug = d
 
 	handlers := NewHandlers()
+	peer := NewSock(handlers)
+
 	return GtMan{
 		localTCPServerName: "",
 		localWSServerName:  "",
 		handlers:           handlers,
+		peer:               peer,
 	}
 }
 
 //AddHandler Add a new Handler in this server
-func (gm GtMan) AddHandler(op string, fn interface{}) error {
+func (gm GtMan) AddHandler(op string, fn BufferReqHandler) {
 	gtLog("GtMan.AddHandler op:%s", op)
-	gm.handlers.Handle(op, fn)
-	return nil
+	gm.handlers.HandleBufferRequest(op, fn)
 }
 
 //StartTCPServer Start TCP Server
@@ -57,9 +60,19 @@ func (gm GtMan) StartTCPServer(url string) (*Server, error) {
 	gm.localTCPServerName = url
 
 	s, err := Listen("tcp", gm.localTCPServerName)
+	if err != nil {
+		gtLog("Listen Failed Error:%s", err.Error())
+		return nil, err
+	}
+	s.AcceptHandler = func(sock *Sock) {
+		gtLog("%s Accept Started for %s", sock.Addr(), url)
+	}
+	s.OnHeartbeat = func(load int, t time.Time) {
+		gtLog("load:%d\tt:%s\ts.Addr():%s", load, t, s.Addr())
+	}
 	s.Handlers = gm.handlers
-	go s.Accept()
 	gm.tcpServer = s
+	go gm.tcpServer.Accept()
 	return s, err
 }
 
@@ -89,12 +102,37 @@ func (gm GtMan) StartWSServer(url string, onWSPeerConnect SockHandler, enableFil
 func (gm GtMan) PeerConnect(url string) (*Sock, error) {
 	gtLog("GtMan.PeerConnect url:%s", url)
 
-	s, err := Connect("tcp", url)
-	gm.peer = s
-	return s, err
+	conn, err := Connect("tcp", url)
+	if err != nil {
+		log.Fatal("Connect Failed:", err)
+		return nil, err
+	}
+
+	conn.CloseHandler = func(s *Sock, code int) {
+		gtLog("%s Closed! code:%d", s.Addr(), code)
+	}
+
+	res, err := conn.BufferRequest("echo", []byte("Testing"))
+	if err != nil {
+		gtLog("gm.Peer.BufferRequest(echo... res:%s\tError:%s", res, err.Error())
+		return nil, err
+	}
+
+	gm.peer = conn
+
+	defer conn.Close()
+
+	return conn, err
 }
 
 //Request send Request for Service
 func (gm GtMan) Request(serviceName string, param []byte) ([]byte, error) {
-	return gm.peer.BufferRequest(serviceName, param)
+	if gm.peer != nil {
+		if gm.peer.Addr() != "" {
+			return gm.peer.BufferRequest(serviceName, param)
+		} else {
+			return nil, fmt.Errorf("gm.peer.Addr() Error: Not Connected [%s]", gm.peer.Addr())
+		}
+	}
+	return nil, fmt.Errorf("gm.peer Error: Not Initialised")
 }
