@@ -4,6 +4,7 @@ import (
 	"fmt"
 	//"net/http"
 	//"encoding/json"
+	//"math/rand"
 	"time"
 )
 
@@ -74,7 +75,7 @@ func (gm GtMan) StartTCPServer() (*Server, error) {
 	gm.tcpServer = s
 	// Configure limits with a read timeout of one second
 	gm.tcpServer.Limits = NewLimits(0, 0)
-	gm.tcpServer.Limits.SetReadTimeout(time.Second)
+	gm.tcpServer.Limits.SetReadTimeout(16 * time.Second)
 	gm.tcpServer.Handlers = gm.handlers
 
 	gm.tcpServer.OnHeartbeat = func(load int, t time.Time) {
@@ -96,21 +97,35 @@ func (gm GtMan) Request(serviceName string, param []byte) ([]byte, error) {
 		if err != nil {
 			gtLog("p2pmanager.go::GtMan.Request Error:%s not responding\tError:%s", url, err.Error())
 		} else {
+			defer conn.Close()
 			// As the responder has a one second timeout, set our heartbeat interval to half that time
 			conn.HeartbeatInterval = 500 * time.Millisecond
 			conn.CloseHandler = func(s *Sock, code int) {
-				gtLog("%s Closed with code:%d", conn.Addr(), code)
+				gtLog("%s Closed with code:%d", s.Addr(), code)
 			}
 			res, err := conn.BufferRequest(serviceName, param)
 			if err != nil {
 				gtLog("conn.BufferRequest(serviceName=%s, param=%s) res:%s\tError:%s", serviceName, param, res, err.Error())
 			}
-			defer conn.Close()
 			return res, err
 		}
 		defer conn.Close()
 	}
 	return nil, fmt.Errorf("p2pmanager.go::GtMan.Request error: unable to connect to any hosts")
+}
+
+//StartHealthChecker Check all hosts and mark health
+func (gm GtMan) StartHealthChecker(preferedDelay time.Duration) {
+	gtLog("p2pmanager.go::GtMan.StartHealthChecker Starting with preferedDelay:%s", preferedDelay)
+	ticker := time.NewTicker(preferedDelay)
+	go func() {
+		for t := range ticker.C {
+			fmt.Println("Tick at", t)
+		}
+	}()
+	//time.Sleep(time.Millisecond * 1111)
+	//ticker.Stop()
+	gtLog("p2pmanager.go::GtMan.StartHealthChecker Stopped")
 }
 
 /*
