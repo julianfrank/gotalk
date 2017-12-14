@@ -9,24 +9,17 @@ import (
 func main() {
 	//startTime := time.Now()
 	log.Println("Starting Peer x")
-	x := gotalk.NewManager(true)
-	x.AddHandler("echo", echo)
-	x.StartTCPServer("localhost:9090")
+	x := gotalk.NewManager(true, "localhost:9090")
+	x.AddService("echo", echo)
+	x.StartTCPServer()
 
 	log.Println("Starting Peer y")
-	y := gotalk.NewManager(true)
-	y.AddHandler("echo", echo)
-	y.StartTCPServer("localhost:9092")
-
-	log.Println(" x connecting to y")
-	z, err := x.PeerConnect("localhost:9092")
-
-	log.Println("z.Addr= ", z.Addr(), err)
+	y := gotalk.NewManager(true, "localhost:9092")
+	y.AddService("echo", echo)
+	y.StartTCPServer()
 
 	r, err := x.Request("echo", []byte("Hello"))
-	log.Println("echo Response", r, err)
-
-	//x.StartWSServer("localhost:9091", onWSConnect, true, nil)
+	log.Println("echo Response", string(r), err)
 
 }
 

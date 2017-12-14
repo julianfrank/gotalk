@@ -2,28 +2,12 @@ package gotalk
 
 import (
 	"fmt"
-	"log"
-	"net/http"
+	//"net/http"
+	//"encoding/json"
 	"time"
 )
 
-var (
-	debug bool
-)
-
-//GtMan Structure to hold the Manager
-type GtMan struct {
-	localTCPServerName string
-	tcpServer          *Server
-	localWSServerName  string
-	wsServer           *WebSocketServer
-
-	peer *Sock
-
-	handlers *Handlers
-
-	onWSPeerConnect SockHandler
-}
+var debug bool
 
 func gtLog(pattern string, message ...interface{}) string {
 	s := fmt.Sprintf("p2pmanager.go:\t"+pattern, message...)
@@ -33,49 +17,103 @@ func gtLog(pattern string, message ...interface{}) string {
 	return s
 }
 
-//NewManager Creates a New Manager for gotalk Connections
-func NewManager(d bool) GtMan {
-	debug = d
+//GtMan Structure to hold the Manager
+type GtMan struct {
+	localTCPServerName string
+	tcpServer          *Server
+	localWSServerName  string
+	wsServer           *WebSocketServer
+	services           map[string]map[string]bool //Map of [service name]array of servers providing the service
+	handlers           *Handlers
+	onWSPeerConnect    SockHandler
+}
 
+//NewManager Creates a New Manager for gotalk Connections
+func NewManager(d bool, serverName string) GtMan {
+	debug = d
+	gtLog("NewManager d:%t serverName:%s", d, serverName)
+
+	localTCPServerName := serverName
+	var tcpServer *Server
+	localWSServerName := serverName
+	wsServer := WebSocketHandler()
+	services := make(map[string]map[string]bool)
 	handlers := NewHandlers()
-	peer := NewSock(handlers)
+	var onWSPeerConnect SockHandler
 
 	return GtMan{
-		localTCPServerName: "",
-		localWSServerName:  "",
+		localTCPServerName: localTCPServerName,
+		tcpServer:          tcpServer,
+		localWSServerName:  localWSServerName,
+		wsServer:           wsServer,
+		services:           services,
 		handlers:           handlers,
-		peer:               peer,
+		onWSPeerConnect:    onWSPeerConnect,
 	}
 }
 
-//AddHandler Add a new Handler in this server
-func (gm GtMan) AddHandler(op string, fn BufferReqHandler) {
-	gtLog("GtMan.AddHandler op:%s", op)
+//AddService Add a new Handler in this server
+func (gm GtMan) AddService(op string, fn BufferReqHandler) {
+	gtLog("GtMan.AddService op:%s", op)
 	gm.handlers.HandleBufferRequest(op, fn)
+	if gm.services[op] == nil {
+		gm.services[op] = make(map[string]bool)
+	}
+	gm.services[op][gm.localTCPServerName] = true
 }
 
 //StartTCPServer Start TCP Server
-func (gm GtMan) StartTCPServer(url string) (*Server, error) {
-	gtLog("GtMan.StartTCPServer url:%s", url)
-	gm.localTCPServerName = url
+func (gm GtMan) StartTCPServer() (*Server, error) {
+	gtLog("GtMan.StartTCPServer url:%s", gm.localTCPServerName)
 
 	s, err := Listen("tcp", gm.localTCPServerName)
 	if err != nil {
 		gtLog("Listen Failed Error:%s", err.Error())
 		return nil, err
 	}
-	s.AcceptHandler = func(sock *Sock) {
-		gtLog("%s Accept Started for %s", sock.Addr(), url)
-	}
-	s.OnHeartbeat = func(load int, t time.Time) {
-		gtLog("load:%d\tt:%s\ts.Addr():%s", load, t, s.Addr())
-	}
-	s.Handlers = gm.handlers
 	gm.tcpServer = s
+	// Configure limits with a read timeout of one second
+	gm.tcpServer.Limits = NewLimits(0, 0)
+	gm.tcpServer.Limits.SetReadTimeout(time.Second)
+	gm.tcpServer.Handlers = gm.handlers
+
+	gm.tcpServer.OnHeartbeat = func(load int, t time.Time) {
+		gtLog("load:%d\tt:%s\ts.Addr():%s", load, t, gm.tcpServer.Addr())
+	}
+
 	go gm.tcpServer.Accept()
-	return s, err
+	return gm.tcpServer, err
 }
 
+//Request send Request for Service
+func (gm GtMan) Request(serviceName string, param []byte) ([]byte, error) {
+	gtLog("p2pmanager.go::GtMan.Request serviceName:%s\tparam:%s", serviceName, string(param))
+	//Select host
+	targetHosts := gm.services[serviceName]
+	for url, t := range targetHosts {
+		gtLog("k:%s\tv:%t", url, t)
+		conn, err := Connect("tcp", url)
+		if err != nil {
+			gtLog("p2pmanager.go::GtMan.Request Error:%s not responding\tError:%s", url, err.Error())
+		} else {
+			// As the responder has a one second timeout, set our heartbeat interval to half that time
+			conn.HeartbeatInterval = 500 * time.Millisecond
+			conn.CloseHandler = func(s *Sock, code int) {
+				gtLog("%s Closed with code:%d", conn.Addr(), code)
+			}
+			res, err := conn.BufferRequest(serviceName, param)
+			if err != nil {
+				gtLog("conn.BufferRequest(serviceName=%s, param=%s) res:%s\tError:%s", serviceName, param, res, err.Error())
+			}
+			defer conn.Close()
+			return res, err
+		}
+		defer conn.Close()
+	}
+	return nil, fmt.Errorf("p2pmanager.go::GtMan.Request error: unable to connect to any hosts")
+}
+
+/*
 //StartWSServer Start WebSocket Server
 //This is a Blocking Service
 func (gm GtMan) StartWSServer(url string, onWSPeerConnect SockHandler, enableFileServer bool, httpHandlers http.Handler) (*WebSocketServer, error) {
@@ -96,43 +134,4 @@ func (gm GtMan) StartWSServer(url string, onWSPeerConnect SockHandler, enableFil
 
 	gm.wsServer = ws
 	return ws, nil
-}
-
-//PeerConnect Connect with Peer
-func (gm GtMan) PeerConnect(url string) (*Sock, error) {
-	gtLog("GtMan.PeerConnect url:%s", url)
-
-	conn, err := Connect("tcp", url)
-	if err != nil {
-		log.Fatal("Connect Failed:", err)
-		return nil, err
-	}
-
-	conn.CloseHandler = func(s *Sock, code int) {
-		gtLog("%s Closed! code:%d", s.Addr(), code)
-	}
-
-	res, err := conn.BufferRequest("echo", []byte("Testing"))
-	if err != nil {
-		gtLog("gm.Peer.BufferRequest(echo... res:%s\tError:%s", res, err.Error())
-		return nil, err
-	}
-
-	gm.peer = conn
-
-	defer conn.Close()
-
-	return conn, err
-}
-
-//Request send Request for Service
-func (gm GtMan) Request(serviceName string, param []byte) ([]byte, error) {
-	if gm.peer != nil {
-		if gm.peer.Addr() != "" {
-			return gm.peer.BufferRequest(serviceName, param)
-		} else {
-			return nil, fmt.Errorf("gm.peer.Addr() Error: Not Connected [%s]", gm.peer.Addr())
-		}
-	}
-	return nil, fmt.Errorf("gm.peer Error: Not Initialised")
-}
+}*/
