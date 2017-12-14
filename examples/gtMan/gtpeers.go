@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/julianfrank/gotalk"
 	"log"
 	"time"
@@ -20,7 +21,7 @@ func main() {
 	y.StartTCPServer()
 
 	for i := 0; i < 4; {
-		r, err := x.Request("echo", []byte("Hello"))
+		r, err := x.Request("echo", []byte(fmt.Sprintf("Hello %d", i)))
 		log.Println("echo Response", string(r), err)
 		time.Sleep(time.Second)
 		i++
