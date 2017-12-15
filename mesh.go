@@ -23,21 +23,48 @@ func gtLog(pattern string, message ...interface{}) string {
 	return s
 }
 
-//HostStatus Store the fail count and last change details
-type HostStatus struct {
+//MeshHostStatus Store the fail count and last change details
+type MeshHostStatus struct {
 	FailCount  int
 	LastChange time.Time
 }
 
-//HostMap Map of Host details
-type HostMap map[string]HostStatus
+//MeshHostMap Map of Host details
+type MeshHostMap struct {
+	HostName   string
+	HostStatus MeshHostStatus
+}
 
-//ServiceMap Map of Service Details
-type ServiceMap map[string]HostMap
+//MeshService Map of Service Details
+type MeshService struct {
+	ServiceName string
+	HostMap     []MeshHostMap
+}
 
-//HostStatus Change Host Status for the service
-func (sm ServiceMap) HostStatus(serviceName string, url string, status bool) {
-	gtLog("ServiceMap.HostStatus(serviceName=%s, url=%s ,status=%t)", serviceName, url, status)
+//UpdateStatus Change Host Status for the service
+func (gm GtMan) UpdateStatus(serviceName string, url string, status bool) {
+	gtLog("MeshService.UpdateStatus(serviceName=%s, url=%s ,status=%t)", serviceName, url, status)
+	gtLog("Before %#v", gm.ServiceMap)
+	if len(gm.ServiceMap) == 0 {
+		mhp := MeshHostMap{
+			HostName:   url,
+			HostStatus: MeshHostStatus{FailCount: 0, LastChange: time.Now()},
+		}
+		var ms MeshService
+		ms.ServiceName = serviceName
+		ms.HostMap = append(ms.HostMap, mhp)
+		gm.ServiceMap = append(gm.ServiceMap, ms)
+	}
+	gtLog("After %#v", gm.ServiceMap)
+	/*if sm[serviceName] == nil {
+		hostStatus :=
+		var hostMap HostMap
+		hostMap = map[string]HostStatus{url: hostStatus}
+
+		serviceMap = map[string]HostMap{serviceName: hostMap}
+		sm[serviceName]
+
+	}
 	hostMap := sm[serviceName]
 	if hostMap != nil {
 		hostStatus := hostMap[url]
@@ -49,11 +76,12 @@ func (sm ServiceMap) HostStatus(serviceName string, url string, status bool) {
 			//sm[serviceName][url].FailCount++
 		}
 	} else {
-		hostStatus := HostStatus{FailCount: 0, LastChange: time.Now()}
+
 		hostMap := make(map[string]HostStatus)
 		hostMap[url] = hostStatus
-		gtLog("ServiceMap.HostStatus\t%s being added to ServiceMap for %s", url, serviceName)
-	}
+		sm[serviceName] = hostMap
+		gtLog("ServiceMap.UpdateStatus\t%s being added to ServiceMap for %s", url, serviceName)
+	}*/
 }
 
 //GtMan Structure to hold the Manager
@@ -63,7 +91,7 @@ type GtMan struct {
 	TCPServer       *Server
 	WSServerURL     string
 	WSServer        *WebSocketServer
-	ServiceMap      ServiceMap
+	ServiceMap      []MeshService
 	Handlers        *Handlers
 	OnWSPeerConnect SockHandler
 }
@@ -78,7 +106,7 @@ func NewManager(d bool, name string, serverName string) GtMan {
 	var TCPServer *Server
 	WSServerURL := serverName
 	var WSServer *WebSocketServer
-	var ServiceMap ServiceMap
+	var ServiceMap []MeshService
 	Handlers := NewHandlers()
 	var OnWSPeerConnect SockHandler
 
@@ -96,13 +124,13 @@ func NewManager(d bool, name string, serverName string) GtMan {
 func addService(gm GtMan, op string, fn BufferReqHandler, serverName string) {
 	gtLog("addService\tgm.Name:%#v\top:%s\tfn:%#v\tserverName:%s", gm.Name, op, fn, serverName)
 	gm.Handlers.HandleBufferRequest(op, fn)
-	gm.ServiceMap.HostStatus(op, serverName, true)
+	gm.UpdateStatus(op, serverName, true)
 }
 
 //AddService Add a new Handler in this server
-func (gm GtMan) AddService(op string, fn BufferReqHandler, serverName string) {
-	gtLog("GtMan.AddService\top:%s\tfn:%#v\tserverName:%s", op, fn, serverName)
-	addService(gm, op, fn, serverName)
+func (gm GtMan) AddService(op string, fn BufferReqHandler) {
+	gtLog("GtMan.AddService\top:%s\tfn:%#v", op, fn)
+	addService(gm, op, fn, gm.TCPServerURL)
 }
 
 //AddPeer Add a New Peer in the Mesh
@@ -138,6 +166,7 @@ func (gm GtMan) StartTCPServer() (*Server, error) {
 
 	return gm.TCPServer, err
 }
+
 func echoHandler(s *Sock, name string, in []byte) ([]byte, error) {
 	gtLog("echoHandler\ts.Addr():%s\tname:%s,in:%s", s.Addr(), name, string(in))
 	return in, nil
@@ -146,30 +175,36 @@ func echoHandler(s *Sock, name string, in []byte) ([]byte, error) {
 //Request send Request for Service
 func (gm GtMan) Request(serviceName string, param []byte) ([]byte, error) {
 	gtLog("GtMan.Request\tserviceName:%s\tparam:%s", serviceName, string(param))
-	//Select host
-	hostMap := gm.ServiceMap[serviceName]
-	for url, hostStatus := range hostMap {
-		if hostStatus.FailCount < MeshMaxFailCount {
-			conn, err := Connect("tcp", url)
-			if err != nil {
-				gtLog("GtMan.Request\tError:%s not responding\tError:%s", url, err.Error())
-				gm.ServiceMap.HostStatus(serviceName, url, false)
-			} else {
-				//defer conn.Close()
-				// As the responder has a one second timeout, set our heartbeat interval to half that time
-				conn.HeartbeatInterval = 1 * time.Minute
-				//conn.CloseHandler = func(s *Sock, code int) {					gtLog("%s Closed with code:%d", s.Addr(), code)				}
-				res, err := conn.BufferRequest(serviceName, param)
+	/*hostMap := gm.ServiceMap[serviceName]
+	if hostMap != nil {
+		gtLog("%#v", hostMap)
+		for url, hostStatus := range hostMap {
+			gtLog("%s %#v", url, hostStatus)
+			if hostStatus.FailCount < MeshMaxFailCount {
+				conn, err := Connect("tcp", url)
 				if err != nil {
-					gtLog("GtMan.Request\tconn.BufferRequest(serviceName=%s,param=%s)\tres:%s\tError:%s", serviceName, param, res, err.Error())
+					gtLog("GtMan.Request\tError:%s not responding\tError:%s", url, err.Error())
+					gm.ServiceMap.UpdateStatus(serviceName, url, false)
+				} else {
+					//defer conn.Close()
+					// As the responder has a one second timeout, set our heartbeat interval to half that time
+					conn.HeartbeatInterval = 1 * time.Minute
+					//conn.CloseHandler = func(s *Sock, code int) {					gtLog("%s Closed with code:%d", s.Addr(), code)				}
+					res, err := conn.BufferRequest(serviceName, param)
+					if err != nil {
+						gtLog("GtMan.Request\tconn.BufferRequest(serviceName=%s,param=%s)\tres:%s\tError:%s", serviceName, param, res, err.Error())
+					}
+					return res, err
 				}
-				return res, err
+				//defer conn.Close()
+			} else {
+				gtLog("GtMan.Request\thost blacklisted service:%s\tk:%s\thostMap:%#v", serviceName, url, hostMap)
 			}
-			//defer conn.Close()
-		} else {
-			gtLog("GtMan.Request\thost blacklisted service:%s\tk:%s\thostMap:%#v", serviceName, url, hostMap)
 		}
-	}
+	} else {
+		gtLog("%#v", hostMap)
+	}*/
+
 	return nil, fmt.Errorf("GtMan.Request\terror: unable to connect to any hosts")
 }
 

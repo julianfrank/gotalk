@@ -12,6 +12,7 @@ func main() {
 	//startTime := time.Now()
 	log.Println("Starting Peer x")
 	x := gotalk.NewManager(true, "x", xURL)
+	x.AddService("echo2", echo2Handler)
 	x.StartTCPServer()
 
 	log.Println("Starting Peer y")
@@ -31,4 +32,9 @@ func main() {
 func onWSConnect(s *gotalk.Sock) {
 	s.Notify("hello", "world")
 	log.Println("onWSConnect", s.Addr())
+}
+
+func echo2Handler(s *gotalk.Sock, name string, in []byte) ([]byte, error) {
+	log.Println("echo2Handler\ts.Addr():%s\tname:%s,in:%s", s.Addr(), name, string(in))
+	return []byte(string(in) + string(in)), nil
 }
